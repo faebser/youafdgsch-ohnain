@@ -1,0 +1,6 @@
+node_modules
+package-lock.json
+ufg-onein.sublime*
+bin/
+web-ext-artifacts/
+ufg-onein.sublime-*
