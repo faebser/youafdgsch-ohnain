@@ -47,6 +47,21 @@ Array.prototype.uniq = function() {
 	}
 };
 
+const unzip = ( _array ) => {
+	try {
+		return _array.reduce( ( acc, item ) => {
+			acc[ 0 ].push( item[ 0 ] );
+			acc[ 1 ].push( item[ 1 ] );
+
+			return acc;
+		}, [ [], [] ]);
+	}
+	catch ( e ) {
+		console.error( e );
+		throw e;
+	}
+}
+
 // check if logged in
 // parse list of finished courses
 // into id / name / course number / ects points
@@ -56,45 +71,73 @@ const resultsUrl = "https://ufgonline.ufg.ac.at/ufg_online/pre.init?pstpersonnr=
 
 const parseResults = ( url ) => {
 	console.log( `loading ${url}`);
-	fetch( url )
-	.then( ( response ) => {
-		response.text()
-		.then( (text ) => {
-			// parse reponse body into html
-			const html = domparser.parseFromString(text, "text/html");
-			// query for results in table
-			// into array and do some mangling on it
-			// parse table items into
-			// 
-			// TODO progress callback
-			// TODO maybe I can return an object with two arrays: objects and promises
-			const p = progress(0);
-			const results = 
-				// selects all links inside a table row that start with the correct href
-				Array.from( html.querySelectorAll( "tr[class^='z'] a[href*='wbLv.wbShowLVDetail']" ) )
-					.map( ( a_item ) => {
-						// get id from href
-						const id = getCourseIdFromHref( a_item.href );
-						// make request and get etcs points
-						let number, ects;
-						getNumberAndEctsPoints( a_item.href, p)
-							.then( ( [_number, _ects] ) => {
-								number = _number;
-								ects = _ects;
-								console.log( `number is ${_number}` );
-								console.log( _ects );
-							})
-							.catch( ( error ) => {
-								throw error;
-							})
-						// get course number
 
-						return [ a_item.target, id , a_item.href ];
-					});
+	return new Promise( ( resolve, reject ) => {
+		fetch( url )
+			.then( ( response ) => {
+				response.text()
+				.then( (text ) => {
+					// parse reponse body into html
+					const html = domparser.parseFromString(text, "text/html");
+					// query for results in table
+					// into array and do some mangling on it
+					// parse table items into
+					
+					// this is going to be the callback fro the progress indicator
+					const p = progress(0);
+					const tempResults = 
+						// selects all links inside a table row that start with the correct href
+						Array.from( html.querySelectorAll( "tr[class^='z'] a[href*='wbLv.wbShowLVDetail']" ) )
+							.reduce( ( acc, a_item ) => {
 
-			console.log( results );
-		} )
-	} );
+								acc.objects.push( {
+									// get name from target attr of a
+									"name": a_item.target,
+									// get id from href
+									"id": getCourseIdFromHref( a_item.href ),
+									// save href
+									"href": a_item.href
+								} );
+
+								// get course number, ects and module in promise
+								acc.promises.push( getNumberAndEctsPoints( a_item.href, p) );
+
+								return acc;
+							},
+							// this is the inital state of the accumulator
+							// this will allow us to wait until all
+							// promises are resolved.
+							// also promises[i] belongs to objects[i] 
+							{ "objects": [], "promises": [] } );
+
+					// now we turn the mix of sync an async
+					// data into a list of objects that we can actually use
+					let results;
+					Promise.all( tempResults.promises )
+						.then( ( values ) => {
+							results =
+								values.reduce( ( acc, stuff, index ) => {
+									const [ number, ects_modules ] = stuff;
+
+									// we unzip the ects and module array
+									const [ modules, ects ] = unzip( ects_modules );
+
+									// and extend the object from the tempResulst
+									// with the additional data
+									acc.push(
+										Object.assign( tempResults.objects[index], { number: number, ects: ects, modules: modules } )
+									);
+
+									return acc;
+								}, [] );
+							console.log( results );
+							resolve( results );
+						} );
+				} )
+			} );
+
+	});
+
 };
 
 const getCourseIdFromHref = ( href ) => {
