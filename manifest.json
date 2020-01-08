@@ -1,0 +1,18 @@
+{
+  "manifest_version": 2,
+  "name": "YOUÄFDGSCH-OHNAIN",
+  "version": "0.3",
+
+  "description": "An artistic intervention to free us from the interface oppression",
+
+  "icons": {
+    "48": "icons/logo_48.png"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://ufgonline.ufg.ac.at/ufg_online/webnav.ini"],
+      "js": ["src/youafdsch.js"]
+    }
+  ]
+}
