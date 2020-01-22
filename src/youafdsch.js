@@ -9,6 +9,8 @@ const storage = localStorage;
 const DEBUG = true;
 const _log = console.log;
 
+const ECTS_REGEX = /\d{2}/g;
+
 console.log = function(...input) {
 	if(DEBUG) _log(...input);
 }
@@ -151,39 +153,30 @@ const getNumberAndEctsPoints = ( href, progressCallback ) => {
 		// defensive and lazy
 		// all errors resolve the promise to an error
 		try {
-			fetch( href )
-				.then( ( response ) => {
-					response.text()
-						.then( ( text ) => {
-							// parse response into html
-							const html = domparser.parseFromString( text,"text/html" );
-							// get the course number
-							const number = html.querySelector( "form table tr:nth-child(3) td:nth-child(2) table span" ).textContent;
-							// and the ects points
-							const ectsRows = 
-								Array.from( html.querySelectorAll( "form table tr td table tr.coRow.coTableR" ) )
-									.filter( ( row ) => {
-										// filter out all the rows that are not part of interface cultures study program
-										return row.childNodes[1].textContent.indexOf( "Interface Cultures" ) != -1;
-									})
-									.map( getEctsAndModuleFromRow );
+			getHtmlAndParseIntoDom( href )
+				.then( ( html ) => {
+					// get the course number
+					const number = html.querySelector( "form table tr:nth-child(3) td:nth-child(2) table span" ).textContent;
+					// and the ects points
+					const ectsRows = 
+						Array.from( html.querySelectorAll( "form table tr td table tr.coRow.coTableR" ) )
+							.filter( ( row ) => {
+								// filter out all the rows that are not part of interface cultures study program
+								return row.childNodes[1].textContent.indexOf( "Interface Cultures" ) != -1;
+							})
+							.map( getEctsAndModuleFromRow );
 
-							// call progressCallback
-							progressCallback();
-							// resolve
-							resolve( [number, ectsRows] );
-						});
-				})
+					// call progressCallback
+					progressCallback();
+					// resolve
+					resolve( [number, ectsRows] );
+				});
 		}
 		catch ( e ) {
 			console.error( e );
 			reject( e );
 		}
 	});
-
-
-
-	return p;
 }
 
 const getEctsAndModuleFromRow = ( rowNode ) => {
@@ -200,10 +193,158 @@ const progress = (state) => {
 	}
 };
 
+// https://ufgonline.ufg.ac.at/ufg_online/wborg.display?PORGNR=13942
+// https://ufgonline.ufg.ac.at/ufg_online/wbstudienplan.showStudienplan?pOrgNr=13942&pSJNr=1776&pSpracheNr=1&pStpStpNr=1414&pPrintMode=&pIncludeHistoricSJ=TRUE
+
+const MIME_TYPE = 'text/html';
+
+const getHtmlAndParseIntoDom = ( url ) => {
+	return new Promise( ( resolve, reject ) => {
+		try {
+			fetch( url )
+				.then( ( response ) => {
+					response.text()
+						.then( (text) => {
+							resolve( domparser.parseFromString( text, MIME_TYPE ) );
+						})
+				})
+		}
+		catch ( e ) {
+			reject( e );
+		};
+	});
+};
+
+
+// we get an object that maps from course_id -> module
+// and another object that maps from module -> module_props (like sum of ects)
+const parseAllCourses = ( url ) => {
+	getHtmlAndParseIntoDom( url )
+		.then( ( html ) => {
+			const rows = Array.from( html.querySelectorAll( 'div > table div > table.list tr' ) );
+
+			let name_pair;
+
+			const [ courses_modules, module_props ] 
+				= rows.slice( 1 ) // remove the first row that is only the table headers
+				.filter( ( row ) => {
+					console.log( row );
+					if ( row.hasChildNodes() ) {
+						// remove the repetition of modules names with
+						// sum of ects
+						if ( row.childNodes[ 1 ].classList
+								&& row.childNodes[ 1 ].classList.contains( "tblGroup" )
+								&& row.childNodes[ 1 ].tagName == "TH"
+								&& row.childNodes[ 1 ].getAttribute( "colspan" ) == 4 ) {
+							return false;
+						}
+
+						// remove sum tables
+						if ( row.firstElementChild.classList
+							&& row.firstElementChild.classList.contains( 'tblSumGroup' ) ) {
+							return false;
+						}
+					}
+					// for all the other rows
+					return true;
+				})
+				.reduce( ( acc, row, index) => {
+					// state machine
+					// first get module name
+					if ( row.hasChildNodes()
+						&& row.childNodes[ 1 ].tagName == "TH"
+						&& row.childNodes[ 1 ].classList.contains( 'tblGroup' )
+						&& !row.childNodes[ 1 ].classList.contains( 'white' )) {
+							// we simply add an empty Map for each module
+							// and add the groups later
+							acc[ 1 ].set( row.childNodes[ 1 ].textContent.trim(), new Map() );
+							return acc;
+					}
+					// add group to modules
+					// and update function that returns module-group pair as string
+					if ( row.hasChildNodes()
+						&& row.childNodes[ 1 ].tagName == "TH"
+						&& row.childNodes[ 1 ].classList.contains( 'tblGroup' )
+						&& row.childNodes[ 1 ].classList.contains( 'white' )) {
+							// get last added module
+							const module_name = getLastKeyInMap( acc[ 1 ] );
+							const temp = row.childNodes[ 3 ].textContent.trim();
+							const group_name = temp.split( " " )[ 0 ]; // get the group name 
+							const group_ects = parseInt( temp.match( ECTS_REGEX )[ 1 ] ); // get the second match
+							
+							name_pair = curriedNamePair( module_name, group_name );
+
+							acc[ 1 ].get( module_name ).set( group_name, group_ects );
+							return acc;
+					}
+
+					// the actual rows we are interessted in
+					if ( row.classList.contains( 'z0' ) || row.classList.contains( 'z1' ) ) {
+						// set course_id -> name_pair in first map of acc
+						acc[0].set( 
+							getIdFromHref( row.querySelector( 'a' ).href, 'pstpspnr' ),
+						 	name_pair() );
+
+						return acc;
+					}
+
+					// debug and error case
+					// if we ever reach this we have an error
+
+					console.error( 'uncovered case in state machine ');
+					console.error( row );
+
+					// we still return acc as not to stop the reduce
+					// or get weird values
+					return acc;
+
+				}, [ new Map(), new Map() ]);
+
+				console.log( courses_modules );
+				console.log( module_props );
+		})
+		.catch( ( e ) => {
+			console.error( e );
+		})
+
+};
+
+const curriedNamePair = ( module_name, group_name ) => {
+	const memory = [ module_name, group_name ];
+
+	return () => memory; // return function that returns memory
+}
+
+const getIdFromHref = ( href, target_param ) => {
+	// first split off the whole query string
+	// and then split by & between parameters
+	const params = href.split( '?' )[ 1 ].split( '&' );
+
+	for (var i = 0; i < params.length; i++) {
+		const [ param, value ] = params[i].split( '=' );
+
+		if ( param === target_param ) {
+			return value;
+		}
+	}
+}
+
+const getLastKeyInMap = map => Array.from( map )[ map.size - 1 ][ 0 ];
+const getLastValueInMap = map => Array.from( map )[ map.size - 1 ][ 1 ];
+
 iframe.addEventListener('load', function change (event) {
 	console.log(event);
 
+	console.log( document.body );
+	console.log( domparser.parseFromString( PageTemplate(), MIME_TYPE ) );
+
+	const b = document.createElement( 'body' );
+	b.innerHTML = PageTemplate();
+	document.body.replaceWith( b );
+	//document.body.innerHtml = PageTemplate();
+
 	parseResults( resultsUrl );
+	parseAllCourses( 'https://ufgonline.ufg.ac.at/ufg_online/wbstudienplan.showStudienplan?pOrgNr=13942&pSJNr=1776&pSpracheNr=1&pStpStpNr=1414&pPrintMode=&pIncludeHistoricSJ=TRUE' );
 
 	/*try {
 		'use strict';
