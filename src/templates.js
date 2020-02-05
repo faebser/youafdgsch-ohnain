@@ -8,7 +8,8 @@ const PageTemplate = () => {
 
 			<div>
 				<span>Parse Status</span>
-				<span>xx</span>/<span>yy</span>
+				<span id="progress-status">0</span>/
+				<span id="progress-max">0</span>
 			</div>
 
 			<h2 class="list-header">

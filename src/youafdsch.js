@@ -71,7 +71,7 @@ const unzip = ( _array ) => {
 const studienplanUrl = "https://ufgonline.ufg.ac.at/ufg_online/wbstudienplan.showStudienplan?pOrgNr=&pStpStpNr=1414&pSJNr=1776&pSpracheNr=";
 const resultsUrl = "https://ufgonline.ufg.ac.at/ufg_online/pre.init?pstpersonnr=73071";
 
-const parseResults = ( url ) => {
+const parseResults = ( url, progressCallback, progressTotalCallback ) => {
 	console.log( `loading ${url}`);
 
 	return new Promise( ( resolve, reject ) => {
@@ -86,7 +86,6 @@ const parseResults = ( url ) => {
 					// parse table items into
 					
 					// this is going to be the callback fro the progress indicator
-					const p = progress(0);
 					const tempResults = 
 						// selects all links inside a table row that start with the correct href
 						Array.from( html.querySelectorAll( "tr[class^='z'] a[href*='wbLv.wbShowLVDetail']" ) )
@@ -102,7 +101,7 @@ const parseResults = ( url ) => {
 								} );
 
 								// get course number, ects and module in promise
-								acc.promises.push( getNumberAndEctsPoints( a_item.href, p) );
+								acc.promises.push( getNumberAndEctsPoints( a_item.href, progressCallback ) );
 
 								return acc;
 							},
@@ -111,6 +110,8 @@ const parseResults = ( url ) => {
 							// promises are resolved.
 							// also promises[i] belongs to objects[i] 
 							{ "objects": [], "promises": [] } );
+
+					progressTotalCallback( tempResults.promises.length );
 
 					// now we turn the mix of sync an async
 					// data into a list of objects that we can actually use
@@ -132,7 +133,6 @@ const parseResults = ( url ) => {
 
 									return acc;
 								}, [] );
-							console.log( results );
 							resolve( results );
 						} );
 				} )
@@ -219,94 +219,98 @@ const getHtmlAndParseIntoDom = ( url ) => {
 // we get an object that maps from course_id -> module
 // and another object that maps from module -> module_props (like sum of ects)
 const parseAllCourses = ( url ) => {
-	getHtmlAndParseIntoDom( url )
-		.then( ( html ) => {
-			const rows = Array.from( html.querySelectorAll( 'div > table div > table.list tr' ) );
+	return new Promise( (resolve, reject) => {
+		getHtmlAndParseIntoDom( url )
+			.then( ( html ) => {
+				const rows = Array.from( html.querySelectorAll( 'div > table div > table.list tr' ) );
 
-			let name_pair;
+				let name_pair;
 
-			const [ courses_modules, module_props ] 
-				= rows.slice( 1 ) // remove the first row that is only the table headers
-				.filter( ( row ) => {
-					console.log( row );
-					if ( row.hasChildNodes() ) {
-						// remove the repetition of modules names with
-						// sum of ects
-						if ( row.childNodes[ 1 ].classList
-								&& row.childNodes[ 1 ].classList.contains( "tblGroup" )
-								&& row.childNodes[ 1 ].tagName == "TH"
-								&& row.childNodes[ 1 ].getAttribute( "colspan" ) == 4 ) {
-							return false;
+				const [ courses_modules, module_props ] 
+					= rows.slice( 1 ) // remove the first row that is only the table headers
+					.filter( ( row ) => {
+						console.log( row );
+						if ( row.hasChildNodes() ) {
+							// remove the repetition of modules names with
+							// sum of ects
+							if ( row.childNodes[ 1 ].classList
+									&& row.childNodes[ 1 ].classList.contains( "tblGroup" )
+									&& row.childNodes[ 1 ].tagName == "TH"
+									&& row.childNodes[ 1 ].getAttribute( "colspan" ) == 4 ) {
+								return false;
+							}
+
+							// remove sum tables
+							if ( row.firstElementChild.classList
+								&& row.firstElementChild.classList.contains( 'tblSumGroup' ) ) {
+								return false;
+							}
+						}
+						// for all the other rows
+						return true;
+					})
+					.reduce( ( acc, row, index) => {
+						// state machine
+						// first get module name
+						if ( row.hasChildNodes()
+							&& row.childNodes[ 1 ].tagName == "TH"
+							&& row.childNodes[ 1 ].classList.contains( 'tblGroup' )
+							&& !row.childNodes[ 1 ].classList.contains( 'white' )) {
+								// we simply add an empty Map for each module
+								// and add the groups later
+								acc[ 1 ].set( row.childNodes[ 1 ].textContent.trim(), new Map() );
+								return acc;
+						}
+						// add group to modules
+						// and update function that returns module-group pair as string
+						if ( row.hasChildNodes()
+							&& row.childNodes[ 1 ].tagName == "TH"
+							&& row.childNodes[ 1 ].classList.contains( 'tblGroup' )
+							&& row.childNodes[ 1 ].classList.contains( 'white' )) {
+								// get last added module
+								const module_name = getLastKeyInMap( acc[ 1 ] );
+								const temp = row.childNodes[ 3 ].textContent.trim();
+								const group_name = temp.split( " " )[ 0 ]; // get the group name 
+								const group_ects = parseInt( temp.match( ECTS_REGEX )[ 1 ] ); // get the second match
+								
+								name_pair = curriedNamePair( module_name, group_name );
+
+								acc[ 1 ].get( module_name ).set( group_name, group_ects );
+								return acc;
 						}
 
-						// remove sum tables
-						if ( row.firstElementChild.classList
-							&& row.firstElementChild.classList.contains( 'tblSumGroup' ) ) {
-							return false;
+						// the actual rows we are interested in
+						if ( row.classList.contains( 'z0' ) || row.classList.contains( 'z1' ) ) {
+							// set course_id -> name_pair in first map of acc
+							acc[0].set( 
+								getIdFromHref( row.querySelector( 'a' ).href, 'pstpspnr' ),
+							 	name_pair() );
+
+							return acc;
 						}
-					}
-					// for all the other rows
-					return true;
-				})
-				.reduce( ( acc, row, index) => {
-					// state machine
-					// first get module name
-					if ( row.hasChildNodes()
-						&& row.childNodes[ 1 ].tagName == "TH"
-						&& row.childNodes[ 1 ].classList.contains( 'tblGroup' )
-						&& !row.childNodes[ 1 ].classList.contains( 'white' )) {
-							// we simply add an empty Map for each module
-							// and add the groups later
-							acc[ 1 ].set( row.childNodes[ 1 ].textContent.trim(), new Map() );
-							return acc;
-					}
-					// add group to modules
-					// and update function that returns module-group pair as string
-					if ( row.hasChildNodes()
-						&& row.childNodes[ 1 ].tagName == "TH"
-						&& row.childNodes[ 1 ].classList.contains( 'tblGroup' )
-						&& row.childNodes[ 1 ].classList.contains( 'white' )) {
-							// get last added module
-							const module_name = getLastKeyInMap( acc[ 1 ] );
-							const temp = row.childNodes[ 3 ].textContent.trim();
-							const group_name = temp.split( " " )[ 0 ]; // get the group name 
-							const group_ects = parseInt( temp.match( ECTS_REGEX )[ 1 ] ); // get the second match
-							
-							name_pair = curriedNamePair( module_name, group_name );
 
-							acc[ 1 ].get( module_name ).set( group_name, group_ects );
-							return acc;
-					}
+						// debug and error case
+						// if we ever reach this we have an error
 
-					// the actual rows we are interested in
-					if ( row.classList.contains( 'z0' ) || row.classList.contains( 'z1' ) ) {
-						// set course_id -> name_pair in first map of acc
-						acc[0].set( 
-							getIdFromHref( row.querySelector( 'a' ).href, 'pstpspnr' ),
-						 	name_pair() );
+						console.error( 'uncovered case in state machine ');
+						console.error( row );
 
+						// we still return acc as not to stop the reduce
+						// or get weird values
 						return acc;
-					}
 
-					// debug and error case
-					// if we ever reach this we have an error
+					}, [ new Map(), new Map() ]);
 
-					console.error( 'uncovered case in state machine ');
-					console.error( row );
-
-					// we still return acc as not to stop the reduce
-					// or get weird values
-					return acc;
-
-				}, [ new Map(), new Map() ]);
-
-				console.log( courses_modules );
-				console.log( module_props );
-		})
-		.catch( ( e ) => {
-			console.error( e );
-		})
-
+					resolve({
+						"course_modules": courses_modules,
+						"module_probs": module_props
+					});
+			})
+			.catch( ( e ) => {
+				console.error( e );
+				reject( e );
+			});
+	});
 };
 
 const curriedNamePair = ( module_name, group_name ) => {
@@ -342,8 +346,33 @@ const replaceLamePageLwithOurGloriousNewHTML = () => {
 	document.body.replaceWith( b );
 	document.body.innerHtml = PageTemplate();
 
-	// parseResults( resultsUrl );
-	// parseAllCourses( 'https://ufgonline.ufg.ac.at/ufg_online/wbstudienplan.showStudienplan?pOrgNr=13942&pSJNr=1776&pSpracheNr=1&pStpStpNr=1414&pPrintMode=&pIncludeHistoricSJ=TRUE' );
+	// get correct elements to display progress
+
+	const curryProgressCallback = ( element ) => {
+		let state = 0;
+
+		return () => {
+			state++;
+			element.textContent = state;
+		}
+	};
+
+	const curryProgressMax = ( element ) => {
+		return ( max ) => {
+			element.textContent = max;
+		}
+	}
+
+	const progressCallback = curryProgressCallback( document.querySelector( '#progress-status' ) );
+	const progressMax = curryProgressMax( document.querySelector( '#progress-max' ) );
+
+	Promise.all([
+		parseAllCourses( 'https://ufgonline.ufg.ac.at/ufg_online/wbstudienplan.showStudienplan?pOrgNr=13942&pSJNr=1776&pSpracheNr=1&pStpStpNr=1414&pPrintMode=&pIncludeHistoricSJ=TRUE' ),
+		parseResults( resultsUrl, progressCallback, progressMax )
+	])
+	.then( ( values ) => {
+		console.log( values );
+	});
 }
 
 
