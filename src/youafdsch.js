@@ -278,7 +278,7 @@ const parseAllCourses = ( url ) => {
 							return acc;
 					}
 
-					// the actual rows we are interessted in
+					// the actual rows we are interested in
 					if ( row.classList.contains( 'z0' ) || row.classList.contains( 'z1' ) ) {
 						// set course_id -> name_pair in first map of acc
 						acc[0].set( 
@@ -332,19 +332,61 @@ const getIdFromHref = ( href, target_param ) => {
 const getLastKeyInMap = map => Array.from( map )[ map.size - 1 ][ 0 ];
 const getLastValueInMap = map => Array.from( map )[ map.size - 1 ][ 1 ];
 
-iframe.addEventListener('load', function change (event) {
-	console.log(event);
 
-	console.log( document.body );
-	console.log( domparser.parseFromString( PageTemplate(), MIME_TYPE ) );
+// MAIN ENTRY POINT
+
+const replaceLamePageLwithOurGloriousNewHTML = () => {
 
 	const b = document.createElement( 'body' );
 	b.innerHTML = PageTemplate();
 	document.body.replaceWith( b );
-	//document.body.innerHtml = PageTemplate();
+	document.body.innerHtml = PageTemplate();
 
-	parseResults( resultsUrl );
-	parseAllCourses( 'https://ufgonline.ufg.ac.at/ufg_online/wbstudienplan.showStudienplan?pOrgNr=13942&pSJNr=1776&pSpracheNr=1&pStpStpNr=1414&pPrintMode=&pIncludeHistoricSJ=TRUE' );
+	// parseResults( resultsUrl );
+	// parseAllCourses( 'https://ufgonline.ufg.ac.at/ufg_online/wbstudienplan.showStudienplan?pOrgNr=13942&pSJNr=1776&pSpracheNr=1&pStpStpNr=1414&pPrintMode=&pIncludeHistoricSJ=TRUE' );
+}
+
+
+iframe.addEventListener('load', function change (event) {
+	console.log(event);
+
+	// two cases:
+	// 1. we navigate to the visitencard/the student overview
+	// 2. we navigate to our "fake" page
+
+	// how do we distinguish those two cases?
+	// for 1, the frame has a src attribute but for some
+	// fucked up reason it does not change will we move around
+	// ufg online. So we cannot resort to just simply check that
+	// we need to also check for the existence of a certain node
+
+	console.log( document.querySelector("#mainfs frame[name=detail]").src );
+
+	const frame = document.querySelector( "#mainfs frame[name=detail]" );
+	console.log( frame.contentWindow.document.body.querySelector( 'a[href*=studienstatus]' ) );
+
+	// check for the thing we want to exchange
+	if ( frame.contentWindow.document.body.querySelector( 'a[href*=studienstatus]' ) != null ) {
+		console.log( "found" );
+		// change element
+		const element = frame.contentWindow.document.body.querySelector( 'a[href*=studienstatus]' );
+		console.log(element.onclick);
+
+		// new onclick handler
+		element.addEventListener( "click", ( event ) => {
+			console.log( "clicked" );
+			event.preventDefault();
+			replaceLamePageLwithOurGloriousNewHTML();
+			// push empty new state into history
+			// so that we can get back
+			history.pushState("", "title", "ufg-online-sucks-hairy-balls.html");
+
+
+		});
+	}
+
+	console.log( document.body );
+	//console.log( domparser.parseFromString( PageTemplate(), MIME_TYPE ) );
 
 	/*try {
 		'use strict';
