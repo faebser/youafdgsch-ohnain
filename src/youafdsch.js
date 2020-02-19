@@ -9,6 +9,9 @@ const storage = localStorage;
 const DEBUG = true;
 const _log = console.log;
 
+let NEXT_LOAD = false;
+
+
 const ECTS_REGEX = /\d{2}/g;
 
 console.log = function(...input) {
@@ -341,6 +344,17 @@ const getLastValueInMap = map => Array.from( map )[ map.size - 1 ][ 1 ];
 
 const replaceLamePageLwithOurGloriousNewHTML = () => {
 
+	const dom_string = document.documentElement.innerHTML;
+
+	window.onpopstate = function( event ) {
+			//alert("location: " + document.location + ", state: " + JSON.stringify(event.state));
+			document.documentElement.innerHTML = dom_string;
+			// TODO run our code on the html again
+			// update iframe
+			// run function
+			window.onpopstate = null;
+	};
+
 	const b = document.createElement( 'body' );
 	b.innerHTML = PageTemplate();
 	document.body.replaceWith( b );
@@ -372,12 +386,15 @@ const replaceLamePageLwithOurGloriousNewHTML = () => {
 	])
 	.then( ( values ) => {
 		console.log( values );
+
+		
 	});
 }
 
 
 iframe.addEventListener('load', function change (event) {
 	console.log(event);
+	console.log( "nextload: " + NEXT_LOAD );
 
 	// two cases:
 	// 1. we navigate to the visitencard/the student overview
@@ -385,7 +402,7 @@ iframe.addEventListener('load', function change (event) {
 
 	// how do we distinguish those two cases?
 	// for 1, the frame has a src attribute but for some
-	// fucked up reason it does not change will we move around
+	// fucked up reason it does not change while we move around
 	// ufg online. So we cannot resort to just simply check that
 	// we need to also check for the existence of a certain node
 
@@ -403,14 +420,20 @@ iframe.addEventListener('load', function change (event) {
 
 		// new onclick handler
 		element.addEventListener( "click", ( event ) => {
+			// this history shit does not work
+			// we have do it differently
+			// maybe we can set some state that we can read later when there is
+			// the page load?
+			NEXT_LOAD = true;
 			console.log( "clicked" );
 			event.preventDefault();
-			replaceLamePageLwithOurGloriousNewHTML();
+				
+			//replaceLamePageLwithOurGloriousNewHTML();
 			// push empty new state into history
 			// so that we can get back
 			history.pushState("", "title", "ufg-online-sucks-hairy-balls.html");
 
-
+			replaceLamePageLwithOurGloriousNewHTML();
 		});
 	}
 
