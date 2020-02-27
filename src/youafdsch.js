@@ -8,11 +8,10 @@ const domparser = new DOMParser();
 const storage = localStorage;
 const DEBUG = true;
 const _log = console.log;
+const DEV = true;
 
-let NEXT_LOAD = false;
 
-
-const ECTS_REGEX = /\d{2}/g;
+const ECTS_REGEX = /\d{2}|\d{1}/g;
 
 console.log = function(...input) {
 	if(DEBUG) _log(...input);
@@ -67,6 +66,24 @@ const unzip = ( _array ) => {
 	}
 }
 
+const arrays_to_object = ( _array ) => {
+	const [ keys, values ] = _array;
+	return _arrays_to_object( keys, values );
+}
+
+const _arrays_to_object = ( keys, values ) => {
+	try {
+		return keys.reduce( ( acc, item, index ) => {
+			acc[ item ] = values[ index ];
+			return acc;
+		}, {} );
+	}
+	catch ( e ) {
+		console.error( e );
+		throw e;
+	}
+}
+
 // check if logged in
 // parse list of finished courses
 // into id / name / course number / ects points
@@ -81,7 +98,7 @@ const parseResults = ( url, progressCallback, progressTotalCallback ) => {
 		fetch( url )
 			.then( ( response ) => {
 				response.text()
-				.then( (text ) => {
+				.then( ( text ) => {
 					// parse reponse body into html
 					const html = domparser.parseFromString(text, "text/html");
 					// query for results in table
@@ -100,7 +117,8 @@ const parseResults = ( url, progressCallback, progressTotalCallback ) => {
 									// get id from href
 									"id": getCourseIdFromHref( a_item.href ),
 									// save href
-									"href": a_item.href
+									"href": a_item.href,
+									"semester": a_item.parentNode.previousElementSibling.textContent.trim()
 								} );
 
 								// get course number, ects and module in promise
@@ -126,12 +144,15 @@ const parseResults = ( url, progressCallback, progressTotalCallback ) => {
 									const [ number, ects_modules ] = stuff;
 
 									// we unzip the ects and module array
-									const [ modules, ects ] = unzip( ects_modules );
+									const ects = 
+										arrays_to_object(
+											unzip( ects_modules )
+										);
 
 									// and extend the object from the tempResulst
 									// with the additional data
 									acc.push(
-										Object.assign( tempResults.objects[index], { number: number, ects: ects, modules: modules } )
+										Object.assign( tempResults.objects[index], { number: number, ects: ects } )
 									);
 
 									return acc;
@@ -275,6 +296,8 @@ const parseAllCourses = ( url ) => {
 								const temp = row.childNodes[ 3 ].textContent.trim();
 								const group_name = temp.split( " " )[ 0 ]; // get the group name 
 								const group_ects = parseInt( temp.match( ECTS_REGEX )[ 1 ] ); // get the second match
+
+								console.log( group_ects, temp );
 								
 								name_pair = curriedNamePair( module_name, group_name );
 
@@ -343,6 +366,7 @@ const getLastValueInMap = map => Array.from( map )[ map.size - 1 ][ 1 ];
 // MAIN ENTRY POINT
 
 const replaceLamePageLwithOurGloriousNewHTML = () => {
+	'use strict';
 
 	const dom_string = document.documentElement.innerHTML;
 
@@ -385,16 +409,102 @@ const replaceLamePageLwithOurGloriousNewHTML = () => {
 		parseResults( resultsUrl, progressCallback, progressMax )
 	])
 	.then( ( values ) => {
-		console.log( values );
+		// unholy layered destrucutring
+		const [ courses, results ] = values;
+		// const { courses_modules, module_props } = courses;
 
-		
+		console.log( courses );
+		console.log( results );
+
+		// we need an object that has the following probs
+		// module name
+		// module max points
+		// module made points
+		// groups
+		//	group names
+		//	group max points
+		//	group made points
+		//	group courses
+		//		course names
+		//		course semester
+		//		course points
+
+		let templateObjects = [];
+
+		courses.module_probs.forEach( ( value, key ) => {
+
+			if ( value.size == 0 ) {
+				return;
+			}
+
+			const o = Object.fromEntries( value );
+
+			const groups = Object.keys( o ).reduce( ( acc, group_name ) => {
+					acc.push( buildGroupObject( key, group_name, results, courses.course_modules, o[ group_name ] ) );
+					return acc;
+				}, []);
+
+			templateObjects.push({
+				"name": key,
+				"made_points": groups.reduce( ( acc, item ) => { return acc + item.made_points }, 0),
+				"total_points": Object.values( o ).reduce( ( acc, points ) => { return acc + points }, 0 ),
+				"groups": groups
+			});
+		});
+
+		console.log( templateObjects );
+
+		const templateString = 
+			templateObjects.map( ( item ) => {
+				return ModuleTemplate( item );
+			})
+			.reduce( ( acc, item ) => {
+				return acc + item;
+			});
+		//ModuleTemplate( templateObjects[ 0 ]);
+
+		document.body.querySelector( "#content" ).innerHTML = templateString;
+
 	});
+}
+
+const buildGroupObject = ( module_name, group_name, results, course_modules, group_points ) => {
+	const c = results
+		.filter( ( o ) => {
+			if( course_modules.has( o.id ) ) {
+				const [ _module, group ] = course_modules.get( o.id );
+
+				return _module === module_name && group === group_name;
+			}
+			return false;
+		})
+		// extend the objects in c with
+		// the correct amount of ects
+		.map( ( item ) => {
+			item.currentEcts = Object.keys( item.ects ).filter( ( item ) => {
+				return item.includes( module_name );
+			})
+			.reduce( ( acc, key ) => {
+				return acc + item.ects[ key ];
+			}, 0);
+
+			return item;
+		});
+
+
+	return {
+		name: group_name,
+		total_points: group_points,
+		courses: c,
+		made_points: c.reduce( ( acc, item ) => {
+			return acc + item.currentEcts;
+		}, 0)
+	};
 }
 
 
 iframe.addEventListener('load', function change (event) {
 	console.log(event);
-	console.log( "nextload: " + NEXT_LOAD );
 
 	// two cases:
 	// 1. we navigate to the visitencard/the student overview
@@ -424,7 +534,6 @@ iframe.addEventListener('load', function change (event) {
 			// we have do it differently
 			// maybe we can set some state that we can read later when there is
 			// the page load?
-			NEXT_LOAD = true;
 			console.log( "clicked" );
 			event.preventDefault();
 				
@@ -438,126 +547,4 @@ iframe.addEventListener('load', function change (event) {
 	}
 
 	console.log( document.body );
-	//console.log( domparser.parseFromString( PageTemplate(), MIME_TYPE ) );
-
-	/*try {
-		'use strict';
-
-		const innerDoc = iframe.contentDocument || iframe.contentWindow.document;
-		const items = Array.from(innerDoc.querySelectorAll('table.list tr'));
-		
-		if(items.length == 0) return;
-
-		console.log('found a match');
-
-		// removing the huren on click
-
-		Array.from(innerDoc.querySelectorAll('table.list tr a[href*="wbLv.wbShowLVDetail"]'))
-			.forEach((element) => {
-				console.log(element.getAttribute('onclick'));
-				element.removeAttribute('onclick');
-				//element.removeAttribute('target');
-				element.target = '_blank';
-				element.classList.add('link-check');
-				element.addEventListener('onclick', () => true);
-				const clone = element.cloneNode();
-				while (element.firstChild) {
-  					clone.appendChild(element.lastChild);
-				}
-				element.parentNode.replaceChild(clone, element);
-				//element.setAttribute('target', '_blank');
-			});
-
-		// [[[url, id]...], node], ...]
-		const sortedItems = items.reduce((acc, item) => {
-			if(item.classList.contains('z0') || item.classList.contains('z1')) {
-				const link = Array.from(item.getElementsByTagName('a'))
-									.filter((a) => a.classList.contains('link-check'))
-									.shift();
-				acc[acc.length - 1][0].push([link.href, link.href.split("=")[1]]);
-				return acc;
-			}
-			if(item.classList.length == 0 && (item.textContent == String.fromCharCode(160) || item.firstElementChild.textContent == String.fromCharCode(160))) {
-				acc[acc.length - 1][1] = item;
-				acc.push([[],]);
-				return acc;
-			}
-			return acc;
-		}, [[[]]])
-		.filter(item => item[0].length != 0);
-
-		console.log(sortedItems);
-
-		const promises = sortedItems.map((outer) => {
-			const [items, node] = outer;
-			const _items = items.map(([href, id]) => {
-				// try to get result from storage
-				const result = storage.getItem(id);
-				if(result !== null) {
-					return new Promise((resolve) => {
-						resolve([parseInt(result), id]);
-					});
-				}
-				return fetch(href)
-						.then((response) => {
-							return new Promise((resolve) => {
-								response.text()
-								.then((text) => {
-									// parse here
-									console.log('id', id);
-									const html = domparser.parseFromString(text, "text/html");
-									let result = Array.from(html.querySelectorAll('table.cotable .coRow.hi'))
-										.map((table_item) => {
-											return [table_item.firstElementChild.textContent,  table_item.children[5].textContent];
-										})
-										.filter(([text, _points]) => {
-											return text.indexOf('Interface Cultures') != -1
-										})
-										.uniq()
-										.reduce((sum, [_text, points]) => {
-											return sum + parseInt(points);
-										}, 0);
-
-									// sum is still 0
-									// lets see if it is a freifach
-
-									if (result === 0) {
-										try {
-											console.log("trying freifach");
-											result = Array.from(html.querySelectorAll('td.MaskRenderer'))
-													.filter(el => el.textContent.indexOf('Freie Wahllehrveranstaltung') != -1 && el.textContent.indexOf('Freie Wahllehrveranstaltung') == 0)
-													.map(el => el.querySelector('span.bold').textContent)
-													.reduce((sum, number) => sum + parseInt(number), 0);
-											console.log("freifach got", result);
-										}
-										catch (_) {
-											result = 0;
-										}
-									}
-
-									storage.setItem(id, result);
-										
-									// resolve to ects points result
-									resolve([
-										result,
-										id
-									]);
-								});
-							});
-						});
-			});
-			return [_items, node];
-		});
-
-		console.log(promises[0][0]);
-
-		promises.forEach(([promises, node]) => {
-			Promise.all(promises).then(result => {
-				node.textContent = result.reduce((sum, [points, _id]) => sum + points, 0)
-			})
-		});
-	}
-	catch (e) {
-		console.error(e);
-	} */
 });
